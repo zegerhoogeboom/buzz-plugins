@@ -1,4 +1,5 @@
 import { React } from "../react";
+import type { OpenTarget, Relay } from "../buzz";
 import type { KeyStore } from "../linear/keys";
 import { acceptsMoves, sortColumn } from "../linear/model";
 import type { BoardStore, Snapshot } from "../linear/store";
@@ -15,6 +16,9 @@ const EDGE = 64;
 // React exists only once `apply` has run, so the memoised card is made on first render.
 let MemoCard: typeof CardImpl | undefined;
 const card = () => (MemoCard ??= React.memo(CardImpl) as typeof CardImpl);
+
+/** What "Grill & build" in the details needs from the host. */
+export type Handoff = { relay: Relay; open(target: OpenTarget): Promise<unknown> };
 
 type Drag = { id: string; x: number; y: number; dx: number; dy: number; width: number; over: string | null };
 
@@ -34,10 +38,12 @@ export function createBoardPage({
   store,
   keys,
   openSettings,
+  handoff,
 }: {
   store: BoardStore;
   keys: KeyStore;
   openSettings(): void;
+  handoff: Handoff;
 }) {
   return function BoardPage() {
     const snapshot = React.useSyncExternalStore(store.subscribe, store.snapshot);
@@ -386,7 +392,7 @@ export function createBoardPage({
                 );
               })}
             </div>
-            {selected && <Details issue={selected} snapshot={snapshot} store={store} onClose={close} />}
+            {selected && <Details issue={selected} snapshot={snapshot} store={store} handoff={handoff} onClose={close} />}
           </div>
         )}
 

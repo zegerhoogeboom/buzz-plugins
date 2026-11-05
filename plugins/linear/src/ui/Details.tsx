@@ -2,7 +2,9 @@ import { React } from "../react";
 import { acceptsMoves } from "../linear/model";
 import type { BoardStore, Snapshot } from "../linear/store";
 import type { Issue, IssueDetail } from "../linear/types";
+import type { Handoff as HandoffDeps } from "./Board";
 import { Avatar, prLabel } from "./Card";
+import { Handoff } from "./Handoff";
 import { safeColor } from "./color";
 import { fullDate, PRIORITY_LABEL } from "./format";
 import { CloseIcon, ExternalIcon, PriorityIcon, ProgressIcon, PullRequestIcon, StatusIcon } from "./icons";
@@ -11,6 +13,7 @@ type Props = {
   issue: Issue;
   snapshot: Snapshot;
   store: BoardStore;
+  handoff: HandoffDeps;
   onClose(): void;
 };
 
@@ -34,7 +37,7 @@ function Description({ text }: { text: string }) {
   );
 }
 
-export function Details({ issue, snapshot, store, onClose }: Props) {
+export function Details({ issue, snapshot, store, handoff, onClose }: Props) {
   const [loaded, setLoaded] = React.useState<{ id: string; detail: IssueDetail } | null>(null);
   const [failed, setFailed] = React.useState(false);
   const detail = loaded?.id === issue.id ? loaded.detail : null;
@@ -212,6 +215,14 @@ export function Details({ issue, snapshot, store, onClose }: Props) {
         )}
       </div>
       <footer className="mtl-details-foot">
+        <Handoff
+          key={issue.id}
+          relay={handoff.relay}
+          open={handoff.open}
+          issue={issue}
+          state={state?.name}
+          description={failed ? "" : detail?.description}
+        />
         <a className="mtl-button" href={issue.url} target="_blank" rel="noopener noreferrer">
           Open in Linear <ExternalIcon />
         </a>

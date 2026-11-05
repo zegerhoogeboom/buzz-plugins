@@ -8,7 +8,7 @@ import { PAGE_ICON } from "./ui/icons";
 import { createSettingsCard } from "./ui/Settings";
 import { CSS } from "./ui/styles";
 
-export const inject = ["react", "pages", "settingsCards", "navigation", "host"];
+export const inject = ["react", "pages", "settingsCards", "navigation", "host", "relay"];
 
 export function apply(ctx: Context) {
   provideReact(ctx.react);
@@ -63,7 +63,14 @@ export function apply(ctx: Context) {
     primary: true,
     layout: "workspace",
     icon: PAGE_ICON,
-    component: createBoardPage({ store, keys, openSettings }),
+    // "Grill & build" posts the open issue to a Buzz channel through the host's own outbox, as the viewer (`ctx.relay`); it reaches
+    // no network of its own.
+    component: createBoardPage({
+      store,
+      keys,
+      openSettings,
+      handoff: { relay: ctx.relay, open: (target) => ctx.navigation.open(target) },
+    }),
   });
   ctx.settingsCards.register({
     id: "settings",

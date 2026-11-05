@@ -134,6 +134,30 @@ Taken in the Buzz desktop app on Linux (WebKitGTK), with the plugin's test doubl
 
 </details>
 
+<details>
+<summary><b>Grill & build: hand an issue to an agent</b></summary>
+
+### Grill & build: hand an issue to an agent
+
+The details panel has a **Grill & build** button under the issue. Pick a channel and who to hand the issue to (agents are listed first, and someone called Hermes is picked by default), then press it. The plugin posts one message to that channel, as you, mentioning that agent:
+
+```text
+@Hermes Grill & build: [COR-12 Export lists](https://linear.app/…/COR-12) (Todo · High)
+
+Read the issue in Linear, with its comments and sub-issues. Grill me first: ask the questions that decide scope, behaviour and architecture, a few at a time, until the plan is locked. Then build it in a fresh worktree, open a draft PR that links the issue, and report back here.
+
+> the issue's description, quoted, cut at 1,500 characters
+```
+
+- The agent is notified by the message's mention tag, exactly as if you had mentioned it from the composer. The conversation then carries on in that channel: answer its questions there.
+- The message goes through Buzz's own outbox (`ctx.relay`), signed by Buzz as you. The plugin reaches no new network address and holds no new key; the install review is unchanged.
+- The agent reads the rest of the issue itself, so it needs its own access to Linear (Hermes has Linear's MCP). The quoted description is there for an agent that has none.
+- Only members of the chosen channel can be picked. Before sending, the plugin asks the relay for the channel's current members and sends nothing if the one picked has left.
+- The last channel and pick are remembered in this app's profile (`megatech.linear.handoff.v1`, no secrets).
+- After sending, **Open conversation** opens the channel at the message.
+
+</details>
+
 ## For contributors
 
 Contributor notes: [`NOTES.md`](NOTES.md) (what works through the plugin API, how it was tested, what was not). Build with `pnpm install && pnpm build` (writes `plugin.js` next to `manifest.json`; the built file is committed because Buzz never runs a build). Unit tests: `pnpm test` (with the type check, this is all CI runs: `.github/workflows/linear-tests.yml`). Tests in Buzz's web build: `test/run.sh <block/buzz-app checkout>`; CI does not run them, so run them by hand before a change is merged.

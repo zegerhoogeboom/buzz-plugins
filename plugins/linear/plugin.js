@@ -1393,6 +1393,211 @@ function Card({ issue, state, fraction, selected, dragging, moving, settled, onO
 		fraction
 	}), /* @__PURE__ */ React.createElement("span", { className: "mtl-title" }, issue.title)), /* @__PURE__ */ React.createElement("div", { className: "mtl-chips" }, chips), /* @__PURE__ */ React.createElement("div", { className: "mtl-card-foot" }, "Created ", shortDate(issue.createdAt)));
 }
+// src/handoff.ts
+var DESCRIPTION_LIMIT = 1500;
+var STORAGE_KEY = "megatech.linear.handoff.v1";
+/** Channels a message can be sent to: ordinary conversations the viewer can write in. */
+function writableChannels(channels) {
+	return channels.filter((c) => !c.archived && !c.readOnly && !c.hidden && !c.huddle && (c.channelType === void 0 || c.channelType === "stream" || c.channelType === "solo")).sort((a, b) => a.name.localeCompare(b.name));
+}
+/** Everyone in the channel but the viewer, agents first. Names come from profiles; an unknown one shows a short key. */
+function candidates(channel, viewer, profiles) {
+	return [...new Set(channel?.members ?? [])].filter((pubkey) => pubkey !== viewer).map((pubkey) => {
+		const profile = profiles.get(pubkey);
+		return {
+			pubkey,
+			name: profile?.name || `${pubkey.slice(0, 8)}…`,
+			agent: profile?.isAgent === true
+		};
+	}).sort((a, b) => Number(b.agent) - Number(a.agent) || a.name.localeCompare(b.name));
+}
+/** The remembered pick if still there, else someone called Hermes, else the first agent, else nobody. */
+function defaultCandidate(list, remembered) {
+	return list.find((c) => c.pubkey === remembered) ?? list.find((c) => /\bhermes\b/i.test(c.name)) ?? list.find((c) => c.agent);
+}
+/** The remembered channel if still writable, else the first one with someone called Hermes in it, else the first. */
+function defaultChannel(channels, remembered, profiles) {
+	return channels.find((c) => c.id === remembered) ?? channels.find((c) => c.members?.some((pubkey) => /\bhermes\b/i.test(profiles.get(pubkey)?.name ?? ""))) ?? channels[0];
+}
+/** A Markdown link label: brackets and backslashes escaped, one line. */
+function label(text) {
+	return text.replace(/\s+/g, " ").trim().replace(/[\\[\]]/g, "\\$&");
+}
+/**
+* The message. The recipient is notified by the mention tag the host adds, not by the `@name` text, which is only there to
+* read well. The description is quoted (it is what someone wrote in Linear, not an instruction) and cut at DESCRIPTION_LIMIT;
+* the link is how an agent with Linear access reads the rest.
+*/
+function compose(issue, details, recipient) {
+	const facts = [details.state, [
+		"",
+		"Urgent",
+		"High",
+		"Medium",
+		"Low"
+	][issue.priority] || void 0].filter(Boolean).join(" · ");
+	const lines = [
+		`@${recipient} Grill & build: [${label(`${issue.identifier} ${issue.title}`)}](${issue.url})${facts ? ` (${facts})` : ""}`,
+		"",
+		"Read the issue in Linear, with its comments and sub-issues. Grill me first: ask the questions that decide scope, behaviour and architecture, a few at a time, until the plan is locked. Then build it in a fresh worktree, open a draft PR that links the issue, and report back here."
+	];
+	const description = details.description?.trim();
+	if (description) {
+		const cut = description.length > 1500 ? `${description.slice(0, DESCRIPTION_LIMIT).trimEnd()}…` : description;
+		lines.push("", ...cut.split("\n").map((line) => `> ${line}`.trimEnd()));
+	}
+	return lines.join("\n");
+}
+function readRemembered(storage) {
+	try {
+		const value = JSON.parse(storage.getItem(STORAGE_KEY) ?? "{}");
+		if (!value || typeof value !== "object") return {};
+		const { channelId, pubkey } = value;
+		return {
+			...typeof channelId === "string" ? { channelId } : {},
+			...typeof pubkey === "string" && /^[0-9a-f]{64}$/.test(pubkey) ? { pubkey } : {}
+		};
+	} catch {
+		return {};
+	}
+}
+function writeRemembered(storage, value) {
+	try {
+		storage.setItem(STORAGE_KEY, JSON.stringify(value));
+	} catch {}
+}
+// src/ui/Handoff.tsx
+/** "Grill & build": posts the issue to a Buzz channel, mentioning the agent (or person) picked, as the viewer. */
+function Handoff(props) {
+	const relay = React.useSyncExternalStore(props.relay.subscribe, props.relay.snapshot);
+	if (relay.status !== "ready") return /* @__PURE__ */ React.createElement("p", { className: "mtl-muted" }, "Grill & build needs a connected Buzz community.");
+	return /* @__PURE__ */ React.createElement(SessionHandoff, {
+		key: `${relay.origin ?? ""}:${relay.generation}`,
+		...props,
+		session: relay.session,
+		viewer: relay.viewer,
+		origin: relay.origin
+	});
+}
+function SessionHandoff({ session, viewer, origin, open, issue, state, description }) {
+	const list = React.useSyncExternalStore(session.channels.subscribeList, session.channels.list);
+	const profiles = React.useSyncExternalStore(session.profiles.subscribe, session.profiles.snapshot);
+	const remembered = React.useMemo(() => readRemembered(window.localStorage), []);
+	const channels = React.useMemo(() => writableChannels(list.channels), [list.channels]);
+	const [channelId, setChannelId] = React.useState(remembered.channelId ?? "");
+	const [pubkey, setPubkey] = React.useState(remembered.pubkey ?? "");
+	const [phase, setPhase] = React.useState("idle");
+	const [sent, setSent] = React.useState(null);
+	const alive = React.useRef(true);
+	const running = React.useRef(false);
+	React.useEffect(() => {
+		alive.current = true;
+		return () => {
+			alive.current = false;
+		};
+	}, []);
+	React.useEffect(() => session.channels.ensureList(), [session]);
+	const everyone = [...new Set(channels.flatMap((c) => c.members ?? []))].sort().join(",");
+	React.useEffect(() => {
+		if (everyone) session.profiles.ensure(everyone.split(","), "background").catch(() => {});
+	}, [session, everyone]);
+	const channel = channels.find((c) => c.id === channelId) ?? defaultChannel(channels, remembered.channelId, profiles);
+	const people = React.useMemo(() => candidates(channel, viewer, profiles), [
+		channel,
+		viewer,
+		profiles
+	]);
+	const recipient = people.find((c) => c.pubkey === pubkey) ?? defaultCandidate(people, remembered.pubkey);
+	const busy = phase === "sending";
+	async function send() {
+		if (!channel || !recipient || running.current || description === void 0) return;
+		running.current = true;
+		setPhase("sending");
+		try {
+			const fresh = await session.channelWrites.refreshMembership(channel.id);
+			if (fresh.archived || fresh.readOnly || !fresh.members?.includes(recipient.pubkey)) throw new Error("membership");
+			const id = session.messages.send(channel.id, compose(issue, {
+				state,
+				description
+			}, recipient.name), [recipient.pubkey]);
+			writeRemembered(window.localStorage, {
+				channelId: channel.id,
+				pubkey: recipient.pubkey
+			});
+			if (!alive.current) return;
+			setSent({
+				channelId: channel.id,
+				name: channel.name,
+				id
+			});
+			setPhase("idle");
+		} catch {
+			if (alive.current) setPhase("error");
+		} finally {
+			running.current = false;
+		}
+	}
+	function openConversation() {
+		if (!sent || !viewer || !origin) return;
+		open({
+			version: 1,
+			kind: "conversation",
+			scope: {
+				viewer,
+				communityOrigin: origin
+			},
+			channelId: sent.channelId,
+			.../^[0-9a-f]{64}$/.test(sent.id) ? { messageId: sent.id } : {}
+		}).catch(() => {});
+	}
+	if (sent) return /* @__PURE__ */ React.createElement("div", {
+		className: "mtl-handoff",
+		role: "status"
+	}, /* @__PURE__ */ React.createElement("span", null, "Sent to ", /* @__PURE__ */ React.createElement("b", null, "#", sent.name), "."), /* @__PURE__ */ React.createElement("button", {
+		type: "button",
+		className: "mtl-button",
+		onClick: openConversation,
+		disabled: !viewer || !origin
+	}, "Open conversation"));
+	if (list.status !== "ready" && channels.length === 0) return /* @__PURE__ */ React.createElement("p", { className: "mtl-muted" }, "Loading channels…");
+	if (channels.length === 0) return /* @__PURE__ */ React.createElement("p", { className: "mtl-muted" }, "No channel you can write in.");
+	return /* @__PURE__ */ React.createElement("div", { className: "mtl-handoff" }, /* @__PURE__ */ React.createElement("div", { className: "mtl-handoff-row" }, /* @__PURE__ */ React.createElement("select", {
+		"aria-label": "Channel",
+		className: "mtl-select",
+		value: channel?.id ?? "",
+		disabled: busy,
+		onChange: (event) => {
+			setChannelId(event.target.value);
+			setPhase("idle");
+		}
+	}, channels.map((c) => /* @__PURE__ */ React.createElement("option", {
+		key: c.id,
+		value: c.id
+	}, "#", c.name))), /* @__PURE__ */ React.createElement("select", {
+		"aria-label": "Hand off to",
+		className: "mtl-select",
+		value: recipient?.pubkey ?? "",
+		disabled: busy || people.length === 0,
+		onChange: (event) => {
+			setPubkey(event.target.value);
+			setPhase("idle");
+		}
+	}, !recipient && /* @__PURE__ */ React.createElement("option", { value: "" }, people.length ? "Choose who" : "Nobody else here"), people.map((c) => /* @__PURE__ */ React.createElement("option", {
+		key: c.pubkey,
+		value: c.pubkey
+	}, c.name, c.agent ? " (agent)" : "")))), /* @__PURE__ */ React.createElement("button", {
+		type: "button",
+		className: "mtl-button",
+		"data-primary": true,
+		disabled: !recipient || busy || description === void 0,
+		onClick: () => void send(),
+		title: recipient ? `Post this issue to #${channel?.name} and mention ${recipient.name}` : void 0
+	}, busy ? "Sending…" : `Grill & build${recipient ? ` with ${recipient.name}` : ""}`), phase === "error" && /* @__PURE__ */ React.createElement("p", {
+		className: "mtl-muted",
+		"data-tone": "error",
+		role: "alert"
+	}, "Not sent: the channel or its members changed. Check the channel and try again."));
+}
 // src/ui/Details.tsx
 var URL_PATTERN = /(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g;
 /** Linear writes descriptions in Markdown; this shows them as plain text, with bare links made clickable. */
@@ -1405,7 +1610,7 @@ function Description({ text }) {
 		rel: "noopener noreferrer"
 	}, part) : /* @__PURE__ */ React.createElement(React.Fragment, { key: index }, part)));
 }
-function Details({ issue, snapshot, store, onClose }) {
+function Details({ issue, snapshot, store, handoff, onClose }) {
 	const [loaded, setLoaded] = React.useState(null);
 	const [failed, setFailed] = React.useState(false);
 	const detail = loaded?.id === issue.id ? loaded.detail : null;
@@ -1488,7 +1693,14 @@ function Details({ issue, snapshot, store, onClose }) {
 	}), " ", issue.progress.done, "/", issue.progress.total)), /* @__PURE__ */ React.createElement("ul", { className: "mtl-list" }, detail.subIssues.map((sub) => /* @__PURE__ */ React.createElement("li", { key: sub.id }, /* @__PURE__ */ React.createElement(StatusIcon, {
 		type: sub.state.type,
 		color: sub.state.color
-	}), /* @__PURE__ */ React.createElement("span", { className: "mtl-id" }, sub.identifier), " ", sub.title))))), /* @__PURE__ */ React.createElement("footer", { className: "mtl-details-foot" }, /* @__PURE__ */ React.createElement("a", {
+	}), /* @__PURE__ */ React.createElement("span", { className: "mtl-id" }, sub.identifier), " ", sub.title))))), /* @__PURE__ */ React.createElement("footer", { className: "mtl-details-foot" }, /* @__PURE__ */ React.createElement(Handoff, {
+		key: issue.id,
+		relay: handoff.relay,
+		open: handoff.open,
+		issue,
+		state: state?.name,
+		description: failed ? "" : detail?.description
+	}), /* @__PURE__ */ React.createElement("a", {
 		className: "mtl-button",
 		href: issue.url,
 		target: "_blank",
@@ -1514,7 +1726,7 @@ function fractions(states) {
 	const started = states.filter((s) => s.type === "started");
 	return Object.fromEntries(started.map((s, i) => [s.id, (i + 1) / (started.length + 1)]));
 }
-function createBoardPage({ store, keys, openSettings }) {
+function createBoardPage({ store, keys, openSettings, handoff }) {
 	return function BoardPage() {
 		const snapshot = React.useSyncExternalStore(store.subscribe, store.snapshot);
 		const keyVersion = React.useSyncExternalStore(keys.subscribe, keys.version);
@@ -1804,6 +2016,7 @@ function createBoardPage({ store, keys, openSettings }) {
 			issue: selected,
 			snapshot,
 			store,
+			handoff,
 			onClose: close
 		})), drag && draggedIssue && state(draggedIssue.stateId) && /* @__PURE__ */ React.createElement("div", {
 			className: "mtl-lift",
@@ -2227,7 +2440,11 @@ img[src="${PAGE_ICON}"] {
 .mtl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .mtl-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .mtl-description { white-space: pre-wrap; overflow-wrap: anywhere; }
-.mtl-details-foot { padding: 12px 14px; border-top: 1px solid var(--mtl-line); }
+.mtl-details-foot { padding: 12px 14px; border-top: 1px solid var(--mtl-line); display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.mtl-handoff { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; }
+.mtl-handoff-row { display: flex; gap: 8px; width: 100%; }
+.mtl-handoff-row select { flex: 1; min-width: 0; height: 28px; }
+.mtl-handoff [data-tone="error"] { margin: 0; color: var(--red-11, #e5484d); }
 
 /* settings card */
 .mtl-settings { height: auto; background: transparent; display: flex; flex-direction: column; gap: 12px; max-width: 560px; padding: 0; }
@@ -2245,7 +2462,8 @@ var inject = [
 	"pages",
 	"settingsCards",
 	"navigation",
-	"host"
+	"host",
+	"relay"
 ];
 function apply(ctx) {
 	provideReact(ctx.react);
@@ -2290,7 +2508,11 @@ function apply(ctx) {
 		component: createBoardPage({
 			store,
 			keys,
-			openSettings
+			openSettings,
+			handoff: {
+				relay: ctx.relay,
+				open: (target) => ctx.navigation.open(target)
+			}
 		})
 	});
 	ctx.settingsCards.register({

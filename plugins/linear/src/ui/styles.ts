@@ -152,7 +152,11 @@ img[src="${PAGE_ICON}"] {
 .mtl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .mtl-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .mtl-description { white-space: pre-wrap; overflow-wrap: anywhere; }
-.mtl-details-foot { padding: 12px 14px; border-top: 1px solid var(--mtl-line); }
+.mtl-details-foot { padding: 12px 14px; border-top: 1px solid var(--mtl-line); display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.mtl-handoff { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; }
+.mtl-handoff-row { display: flex; gap: 8px; width: 100%; }
+.mtl-handoff-row select { flex: 1; min-width: 0; height: 28px; }
+.mtl-handoff [data-tone="error"] { margin: 0; color: var(--red-11, #e5484d); }
 
 /* settings card */
 .mtl-settings { height: auto; background: transparent; display: flex; flex-direction: column; gap: 12px; max-width: 560px; padding: 0; }

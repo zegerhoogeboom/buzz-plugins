@@ -44,10 +44,61 @@ export type SettingsCard = Readonly<{
   component: ReactNamespace.ComponentType<{ active(): boolean }>;
 }>;
 
+/** The part of a relay session the hand-off uses (src/features/relay/{contracts,session,messages}.ts). */
+export type ChannelSummary = Readonly<{
+  id: string;
+  name: string;
+  channelType?: "stream" | "forum" | "dm" | "solo" | "system";
+  archived?: true;
+  readOnly?: true;
+  hidden?: true;
+  huddle?: true;
+  members?: readonly string[];
+}>;
+
+export type Profile = Readonly<{ name: string; isAgent?: true }>;
+
+export type RelaySession = {
+  channels: {
+    list(): Readonly<{ status: string; channels: readonly ChannelSummary[] }>;
+    subscribeList(listener: () => void): () => void;
+    ensureList(): void;
+  };
+  profiles: {
+    snapshot(): ReadonlyMap<string, Profile>;
+    subscribe(listener: () => void): () => void;
+    ensure(pubkeys: readonly string[], priority?: "background"): Promise<void>;
+  };
+  channelWrites: { refreshMembership(channelId: string): Promise<ChannelSummary> };
+  /** Queues a kind 9 message in the host's outbox, signed as the viewer; returns its id. */
+  messages: { send(channelId: string, content: string, mentions?: readonly string[]): string };
+};
+
+export type RelaySnapshot = Readonly<{
+  status: "disconnected" | "connecting" | "ready" | "error";
+  generation: number;
+  origin?: string;
+  viewer?: string;
+  session: RelaySession;
+}>;
+
+export type Relay = { snapshot(): RelaySnapshot; subscribe(listener: () => void): () => void };
+
+export type OpenTarget =
+  | { version: 1; kind: "settings"; section?: string }
+  | {
+      version: 1;
+      kind: "conversation";
+      scope: { viewer: string; communityOrigin: string };
+      channelId: string;
+      messageId?: string;
+    };
+
 export type Context = {
   react: typeof ReactNamespace;
   host: Host;
-  navigation: { open(target: { version: 1; kind: "settings"; section?: string }): Promise<unknown> };
+  relay: Relay;
+  navigation: { open(target: OpenTarget): Promise<unknown> };
   pages: { register(page: Page): void };
   settingsCards: { register(card: SettingsCard): void };
   /** Runs `setup` now and its returned cleanup when the plugin's scope ends. */
